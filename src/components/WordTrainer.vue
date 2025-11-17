@@ -4,7 +4,11 @@ import { Check, ChevronDown, RotateCcw, X } from 'lucide-vue-next'
 import AppButton from './ui/AppButton.vue'
 import { exercises } from '../data/exercises'
 import { shuffleArray } from '../utils'
-import { sendAnswerStat } from '../services/statistics'
+import {
+  sendAnswerStat,
+  sendPlatformStartEvent,
+  sendPlatformAnswerEvent,
+} from '../services/statistics'
 
 const currentExerciseIndex = ref(0)
 const correctCount = ref(0)
@@ -19,6 +23,20 @@ const attemptCounter = ref(0)
 
 let timerInterval = null
 const timeoutIds = new Set()
+let platformStartSent = false
+
+const isPlatform = import.meta.env.VITE_IS_PLATFORM === 'true'
+const testId = import.meta.env.VITE_TEST_ID || null
+
+const extractCourseIdFromUrl = () => {
+  const hashMatch = window.location.hash.match(/course\/(\d+)/i)
+  if (hashMatch) return hashMatch[1]
+  const pathMatch = window.location.pathname.match(/course\/(\d+)/i)
+  if (pathMatch) return pathMatch[1]
+  return import.meta.env.VITE_COURSE_ID || null
+}
+
+const courseId = ref(extractCourseIdFromUrl())
 
 const currentExercise = computed(() => exercises[currentExerciseIndex.value])
 
@@ -45,6 +63,7 @@ const resetExerciseState = (index) => {
   availableParts.value = shuffleArray([...exercises[index].parts])
   placedParts.value = []
   selectedPart.value = null
+  attemptCounter.value = 0
 }
 
 watch(
@@ -86,17 +105,30 @@ const getWordsSnapshot = () =>
 const reportAnswer = (partValue, column, position, isCorrect) => {
   attemptCounter.value += 1
   const currentWord = buildWord(partValue, column)
-  sendAnswerStat({
-    questionText: `Задание ${currentExercise.value.id}`,
-    answers: getWordsSnapshot(),
-    currentWord,
-    isRight: isCorrect,
-    numberTry: attemptCounter.value,
-    column,
-    position,
-    timerSeconds: timer.value,
-    timestamp: new Date().toISOString(),
-  })
+  if (isPlatform) {
+    sendPlatformAnswerEvent({
+      courseId: courseId.value,
+      testId,
+      body: {
+        answers: [currentWord],
+        isRight: isCorrect,
+        numberTry: attemptCounter.value,
+        isHint: false,
+      },
+    })
+  } else {
+    sendAnswerStat({
+      questionText: `Задание ${currentExercise.value.id}`,
+      answers: getWordsSnapshot(),
+      currentWord,
+      isRight: isCorrect,
+      numberTry: attemptCounter.value,
+      column,
+      position,
+      timerSeconds: timer.value,
+      timestamp: new Date().toISOString(),
+    })
+  }
 }
 
 const handleSlotClick = (position, column) => {
@@ -173,11 +205,33 @@ const handleDocumentClick = (event) => {
   }
 }
 
+const formatStartDate = (date) => {
+  const pad = (num) => num.toString().padStart(2, '0')
+  const day = pad(date.getDate())
+  const month = pad(date.getMonth() + 1)
+  const year = date.getFullYear()
+  const hours = pad(date.getHours())
+  const minutes = pad(date.getMinutes())
+  const seconds = pad(date.getSeconds())
+  return `${day}.${month}.${year} ${hours}:${minutes}:${seconds}`
+}
+
+const maybeSendStartEvent = () => {
+  if (!isPlatform || platformStartSent) return
+  platformStartSent = true
+  sendPlatformStartEvent({
+    courseId: courseId.value,
+    testId,
+    startDate: formatStartDate(new Date()),
+  })
+}
+
 onMounted(() => {
   timerInterval = window.setInterval(() => {
     timer.value += 1
   }, 1000)
   document.addEventListener('click', handleDocumentClick)
+  maybeSendStartEvent()
 })
 
 onBeforeUnmount(() => {
