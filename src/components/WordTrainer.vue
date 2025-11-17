@@ -8,6 +8,7 @@ import {
   sendAnswerStat,
   sendPlatformStartEvent,
   sendPlatformAnswerEvent,
+  setAuthToken,
 } from '../services/statistics'
 
 const currentExerciseIndex = ref(0)
@@ -27,6 +28,7 @@ let platformStartSent = false
 
 const isPlatform = import.meta.env.VITE_IS_PLATFORM === 'true'
 const testId = import.meta.env.VITE_TEST_ID || null
+const platformTokenEnv = import.meta.env.VITE_PLATFORM_TOKEN || null
 
 const extractCourseIdFromUrl = () => {
   const hashMatch = window.location.hash.match(/course\/(\d+)/i)
@@ -37,6 +39,8 @@ const extractCourseIdFromUrl = () => {
 }
 
 const courseId = ref(extractCourseIdFromUrl())
+const isPlatformReady = ref(!isPlatform)
+const pendingPlatformAnswers = []
 
 const currentExercise = computed(() => exercises[currentExerciseIndex.value])
 
@@ -106,7 +110,7 @@ const reportAnswer = (partValue, column, position, isCorrect) => {
   attemptCounter.value += 1
   const currentWord = buildWord(partValue, column)
   if (isPlatform) {
-    sendPlatformAnswerEvent({
+    const payload = {
       courseId: courseId.value,
       testId,
       body: {
@@ -115,7 +119,12 @@ const reportAnswer = (partValue, column, position, isCorrect) => {
         numberTry: attemptCounter.value,
         isHint: false,
       },
-    })
+    }
+    if (!isPlatformReady.value) {
+      pendingPlatformAnswers.push(payload)
+    } else {
+      sendPlatformAnswerEvent(payload)
+    }
   } else {
     sendAnswerStat({
       questionText: `Задание ${currentExercise.value.id}`,
@@ -216,8 +225,15 @@ const formatStartDate = (date) => {
   return `${day}.${month}.${year} ${hours}:${minutes}:${seconds}`
 }
 
+const flushPendingPlatformAnswers = () => {
+  while (pendingPlatformAnswers.length) {
+    const payload = pendingPlatformAnswers.shift()
+    sendPlatformAnswerEvent(payload)
+  }
+}
+
 const maybeSendStartEvent = () => {
-  if (!isPlatform || platformStartSent) return
+  if (!isPlatform || platformStartSent || !isPlatformReady.value) return
   platformStartSent = true
   sendPlatformStartEvent({
     courseId: courseId.value,
@@ -226,12 +242,32 @@ const maybeSendStartEvent = () => {
   })
 }
 
+const handleTokenMessage = (event) => {
+  if (!event?.data) return
+  if (event.data.type === 'token' && event.data.token) {
+    setAuthToken(event.data.token)
+    isPlatformReady.value = true
+    maybeSendStartEvent()
+    flushPendingPlatformAnswers()
+  }
+}
+
 onMounted(() => {
   timerInterval = window.setInterval(() => {
     timer.value += 1
   }, 1000)
   document.addEventListener('click', handleDocumentClick)
-  maybeSendStartEvent()
+  if (isPlatform) {
+    window.addEventListener('message', handleTokenMessage)
+    if (platformTokenEnv) {
+      setAuthToken(platformTokenEnv)
+      isPlatformReady.value = true
+      maybeSendStartEvent()
+      flushPendingPlatformAnswers()
+    }
+  } else {
+    maybeSendStartEvent()
+  }
 })
 
 onBeforeUnmount(() => {
@@ -240,6 +276,9 @@ onBeforeUnmount(() => {
   }
   clearAllTimeouts()
   document.removeEventListener('click', handleDocumentClick)
+  if (isPlatform) {
+    window.removeEventListener('message', handleTokenMessage)
+  }
 })
 
 const getPlacedPart = (position, column) =>
