@@ -4,6 +4,7 @@ import { Check, ChevronDown, RotateCcw, X } from 'lucide-vue-next'
 import AppButton from './ui/AppButton.vue'
 import { exercises } from '../data/exercises'
 import { shuffleArray } from '../utils'
+import { sendAnswerStat } from '../services/statistics'
 
 const currentExerciseIndex = ref(0)
 const correctCount = ref(0)
@@ -14,6 +15,7 @@ const placedParts = ref([])
 const availableParts = ref([])
 const dropdownOpen = ref(false)
 const dropdownContainer = ref(null)
+const attemptCounter = ref(0)
 
 let timerInterval = null
 const timeoutIds = new Set()
@@ -75,6 +77,28 @@ const scheduleIncorrectRemoval = (part, position, column) => {
   timeoutIds.add(timeoutId)
 }
 
+const buildWord = (partValue, column) =>
+  column === 'left' ? `${partValue}${leftCommonPart.value}` : `${rightCommonPart.value}${partValue}`
+
+const getWordsSnapshot = () =>
+  placedParts.value.map((item) => buildWord(item.part, item.column))
+
+const reportAnswer = (partValue, column, position, isCorrect) => {
+  attemptCounter.value += 1
+  const currentWord = buildWord(partValue, column)
+  sendAnswerStat({
+    questionText: `Задание ${currentExercise.value.id}`,
+    answers: getWordsSnapshot(),
+    currentWord,
+    isRight: isCorrect,
+    numberTry: attemptCounter.value,
+    column,
+    position,
+    timerSeconds: timer.value,
+    timestamp: new Date().toISOString(),
+  })
+}
+
 const handleSlotClick = (position, column) => {
   if (!selectedPart.value) return
 
@@ -106,6 +130,8 @@ const handleSlotClick = (position, column) => {
     incorrectCount.value += 1
     scheduleIncorrectRemoval(partValue, position, column)
   }
+
+  reportAnswer(partValue, column, position, isCorrect)
 
   selectedPart.value = null
 }
